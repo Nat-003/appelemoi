@@ -1,0 +1,22 @@
+[project]
+name = "call-me-maybe"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "huggingface-hub>=1.18.0",
+    "llm-sdk",
+    "numpy>=2.4.6",
+    "pydantic>=2.13.4",
+    "torch>=2.12.0",
+    "transformers>=5.10.2",
+]
+
+[tool.uv.workspace]
+members = [
+    "llm_sdk_source",
+]
+
+[tool.uv.sources]
+llm-sdk = { workspace = true }
