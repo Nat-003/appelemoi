@@ -3,6 +3,7 @@ from typing import Any
 import numpy as np
 import json
 
+
 class State(Enum):
     EXPECTING_OPEN_BRACE = "expecting_open_brace"
     EXPECTING_NAME = "expecting_name"
@@ -21,73 +22,89 @@ class State(Enum):
 
 
 class Decoder:
-    def __init__(self, model, vocab, function_definitions):
+    def __init__(
+        self,
+        model: Any,
+        vocab: dict[int, str],
+        function_definitions: list[Any],
+    ) -> None:
         self.model = model
         self.vocab = vocab
         self.function_definitions = function_definitions
-        self.current_state = State.EXPECTING_OPEN_BRACE
-        self.valid_tokens_per_state = self._precompute_valid_tokens()
-        self.generate_within_state = ""
-        self.position_within_state = 0
-        self.encoded_name = self.model.encode('"name"').tolist()[0]
-        self.encoded_parameters = self.model.encode('"parameters"').tolist()[0]
-        self.encoded_function_names = {
-                                        func.name: self.model.encode('"' + func.name + '"').tolist()[0]
-                                        for func in self.function_definitions
-                                        }
-        self.encoded_parameter_keys = {}
+        self.current_state: State = State.EXPECTING_OPEN_BRACE
+        self.valid_tokens_per_state: dict[State, set[int]] = (
+            self._precompute_valid_tokens()
+        )
+        self.generate_within_state: str = ""
+        self.position_within_state: int = 0
+        self.encoded_name: list[int] = self.model.encode('"name"').tolist()[0]
+        self.encoded_parameters: list[int] = self.model.encode(
+            '"parameters"'
+        ).tolist()[0]
+        self.encoded_function_names: dict[str, list[int]] = {
+            func.name: self.model.encode('"' + func.name + '"').tolist()[0]
+            for func in self.function_definitions
+        }
+        self.encoded_parameter_keys: dict[str, dict[str, list[int]]] = {}
         for func in self.function_definitions:
             self.encoded_parameter_keys[func.name] = {
                 key: self.model.encode('"' + key + '"').tolist()[0]
                 for key in func.parameters.keys()
             }
-        self.used_parameter_keys = []
-        self.current_parameter_key = ""
-        self.chosen_function_name = ""
-        self.generated_tokens_within_state = []
-        # CHANGE 2: exclude tokens containing a newline from string content.
-        # No legitimate string value in this task contains "\n"; allowing
-        # newline tokens is what let the model run away into prose
-        # ("...profile!}}\nAnswer: ...").
-        self.token_without_quote = {
-            id for id, text in self.vocab.items()
-            if '"' not in text and '\n' not in text
+        self.used_parameter_keys: list[str] = []
+        self.current_parameter_key: str = ""
+        self.chosen_function_name: str = ""
+        self.generated_tokens_within_state: list[int] = []
+
+        self.token_without_quote: set[int] = {
+            id
+            for id, text in self.vocab.items()
+            if '"' not in text and "\n" not in text
         }
-        self.quote_tokens = set(self._get_tokens_for_string('"'))
-        self.bool_token_map = {
-                                self.model.encode("true").tolist()[0][0]: True,
-                                self.model.encode("false").tolist()[0][0]: False,
-                            }
-        # CHANGE 1 (support): the prompt of the current request, stored so the
-        # string state can detect when the copied value has reached a natural
-        # boundary in the prompt text. Set at the start of generate().
-        self.prompt = ""
+        self.quote_tokens: set[int] = set(self._get_tokens_for_string('"'))
+        self.bool_token_map: dict[int, bool] = {
+            self.model.encode("true").tolist()[0][0]: True,
+            self.model.encode("false").tolist()[0][0]: False,
+        }
+
+        self.prompt: str = ""
+
+        self.current_request: str = ""
 
     def _get_tokens_for_string(self, target: str) -> set[int]:
-        result = set()
+        result: set[int] = set()
         for token_id, token_str in self.vocab.items():
             if token_str == target:
                 result.add(token_id)
         return result
 
-
     def _precompute_valid_tokens(self) -> dict[State, set[int]]:
-        result = {}
+        result: dict[State, set[int]] = {}
         result[State.EXPECTING_OPEN_BRACE] = self._get_tokens_for_string("{")
         result[State.EXPECTING_COLON] = self._get_tokens_for_string(":")
         result[State.EXPECTING_COMMA] = self._get_tokens_for_string(",")
-        result[State.EXPECTING_OPEN_PARAMETER_BRACE] = self._get_tokens_for_string("{")
-        result[State.EXPECTING_CLOSING_PARAMETER_BRACE] = self._get_tokens_for_string("}")
-        result[State.EXPECTING_CLOSING_BRACE] = self._get_tokens_for_string("}")
+        result[State.EXPECTING_OPEN_PARAMETER_BRACE] = (
+            self._get_tokens_for_string("{")
+        )
+        result[State.EXPECTING_CLOSING_PARAMETER_BRACE] = (
+            self._get_tokens_for_string("}")
+        )
+        result[State.EXPECTING_CLOSING_BRACE] = self._get_tokens_for_string(
+            "}"
+        )
         result[State.INSIDE_FUNCTION_NAME] = self._inside_function_name()
         result[State.INSIDE_PARAMETER_VALUE_NUMBER] = self._get_number_tokens()
-        result[State.INSIDE_PARAMETER_VALUE_BOOLEAN] = self._get_boolean_tokens()
+        result[State.INSIDE_PARAMETER_VALUE_BOOLEAN] = (
+            self._get_boolean_tokens()
+        )
         result[State.INSIDE_PARAMETER_VALUE_STRING] = self._get_string_tokens()
-        result[State.EXPECTING_PARAMETER_KEY] = self._expecting_paramerter_key()
+        result[State.EXPECTING_PARAMETER_KEY] = (
+            self._expecting_paramerter_key()
+        )
         return result
 
     def _compute_tier2_tokens(self, target: list[int]) -> set[int]:
-        result = set()
+        result: set[int] = set()
         if self.position_within_state >= len(target):
             return result
         else:
@@ -95,7 +112,7 @@ class Decoder:
         return result
 
     def _inside_function_name(self) -> set[int]:
-        result = set()
+        result: set[int] = set()
         for func in self.function_definitions:
             func_name = self.model.encode('"' + func.name + '"').tolist()[0]
             for id in func_name:
@@ -103,7 +120,7 @@ class Decoder:
         return result
 
     def _expecting_paramerter_key(self) -> set[int]:
-        result = set()
+        result: set[int] = set()
         for func in self.function_definitions:
             params = func.parameters.keys()
             for k in params:
@@ -113,42 +130,51 @@ class Decoder:
         return result
 
     def _get_number_tokens(self) -> set[int]:
-        result = set()
+        result: set[int] = set()
         for token_id, token_str in self.vocab.items():
-            if token_str != "" and all(c.isdigit() or c == '.' or  c == '-' for c in token_str):
+            if token_str != "" and all(
+                c.isdigit() or c == "." or c == "-" for c in token_str
+            ):
                 result.add(token_id)
         return result
 
     def _get_boolean_tokens(self) -> set[int]:
-        result = set()
+        result: set[int] = set()
         for token_id, token_str in self.vocab.items():
             if token_str == "true" or token_str == "false":
                 result.add(token_id)
         return result
 
     def _get_string_tokens(self) -> set[int]:
-        result = set()
+        result: set[int] = set()
         for token_id, token_str in self.vocab.items():
-            if ('"' not in token_str or token_str == '"') and '\n' not in token_str:
+            if (
+                '"' not in token_str or token_str == '"'
+            ) and "\n" not in token_str:
                 result.add(token_id)
         return result
 
     def _valid_parameter_key_tokens(self) -> set[int]:
-        result = set()
+        result: set[int] = set()
         if self.chosen_function_name not in self.encoded_parameter_keys:
             return result
 
         prefix_length = len(self.generated_tokens_within_state)
-        for key_name, encoded_key in self.encoded_parameter_keys[self.chosen_function_name].items():
+        for key_name, encoded_key in self.encoded_parameter_keys[
+            self.chosen_function_name
+        ].items():
             if key_name in self.used_parameter_keys:
-                continue  # skip used keys
-            if encoded_key[:prefix_length] == self.generated_tokens_within_state:
+                continue
+            if (
+                encoded_key[:prefix_length]
+                == self.generated_tokens_within_state
+            ):
                 if prefix_length < len(encoded_key):
                     result.add(encoded_key[prefix_length])
         return result
 
     def _valid_value_terminators(self) -> set[int]:
-        result = set()
+        result: set[int] = set()
         for func in self.function_definitions:
             if func.name == self.chosen_function_name:
                 total_keys = len(func.parameters)
@@ -158,35 +184,21 @@ class Decoder:
                     return self._get_tokens_for_string("}")
         return result
 
-
-    def _mask_logits(self ,logits: Any, valid_tokens: set[int]) -> Any:
+    def _mask_logits(self, logits: Any, valid_tokens: set[int]) -> Any:
         arr = np.array(logits)
         cpy = arr.copy()
-        arr[:] = -float('inf')
+        arr[:] = -float("inf")
         arr[list(valid_tokens)] = cpy[list(valid_tokens)]
         return arr
 
     def _valid_function_name_tokens(self) -> set[int]:
-        result = set()
+        result: set[int] = set()
         prefix_length = len(self.generated_tokens_within_state)
         for tokens in self.encoded_function_names.values():
             if tokens[:prefix_length] == self.generated_tokens_within_state:
                 result.add(tokens[len(self.generated_tokens_within_state)])
         return result
 
-    # CHANGE 1: boundary detection for verbatim-copied string values.
-    #
-    # Observation: every string over-run happened AFTER the model had already
-    # copied the complete correct value from the prompt. At that exact moment
-    # the accumulated content matches a span of the prompt that ends at a
-    # natural delimiter: a closing quote in the prompt, or the end of the
-    # prompt itself. When that is true for EVERY occurrence of the content in
-    # the prompt, the value is complete and the only sensible next token is
-    # the closing quote -- so we force it.
-    #
-    # Invented values (e.g. a regex like "[aeiouAEIOU]") never match a span of
-    # the prompt, so the detector never fires and free generation is
-    # preserved for them.
     def _at_value_boundary(self, content_text: str) -> bool:
         found = False
         start = 0
@@ -197,55 +209,101 @@ class Decoder:
             found = True
             end = i + len(content_text)
             if end >= len(self.prompt):
-                pass  # span reaches end of prompt -> boundary
+                pass
             elif self.prompt[end] == '"':
-                pass  # span ends at a closing double quote -> boundary
+                pass
             elif self.prompt[end] == "'" and (
-                end + 1 >= len(self.prompt) or self.prompt[end + 1] in " ,.?!;:"
+                end + 1 >= len(self.prompt)
+                or self.prompt[end + 1] in " ,.?!;:"
             ):
-                # a single quote is a boundary ONLY when followed by a space,
-                # punctuation, or end of prompt. This distinguishes a closing
-                # quote ("...(1, 2, 3)' on the...") from an apostrophe inside
-                # a value ("{user}'s profile"), which must NOT force a close.
+
                 pass
             else:
-                return False  # at least one occurrence continues -> not done
+                return False
             start = i + 1
         return found
 
     def _string_valid_parameter(self) -> set[int]:
         if self.quote_tokens.isdisjoint(self.generated_tokens_within_state):
-            # nothing generated yet -> force the OPENING quote
+
             return self.quote_tokens
         content_tokens = self.generated_tokens_within_state[1:]
         if content_tokens:
             content_text = self.model.decode(content_tokens)
-            # ignore a spurious leading space when matching against the prompt
-            stripped = content_text.lstrip(' ')
+
+            stripped = content_text.lstrip(" ")
             if stripped and self._at_value_boundary(stripped):
-                # the copied value ends exactly at a prompt boundary:
-                # force the CLOSING quote (single-element set -> also skips
-                # the model call entirely, via the fast path)
+
                 return self.quote_tokens
         return self.token_without_quote | self.quote_tokens
 
-    # def _debug(self,target):
-    #     for token_id, token_str in self.vocab.items():
-    #         if token_id == target:
-    #             print(f"the word/sub word is {token_str}")
-
-    def _converted_int_para(self, decoded_para: str) -> int | float:
+    def _converted_int_para(self, decoded_para: str) -> int | float | None:
         for func in self.function_definitions:
             if func.name == self.chosen_function_name:
                 param_type = func.parameters[self.current_parameter_key].type
                 if param_type == "integer":
-                    converted = int(decoded_para)
+                    converted: int | float = int(decoded_para)
                     return converted
                 elif param_type == "number":
                     converted = float(decoded_para)
                     return converted
+        return None
 
-    def _get_valid_tokens(self, fixed_sequence_states: dict[State, State]) -> set[int]:
+    def _debug(self) -> None:
+        print(self.model.encode("-").tolist()[0])
+        print(len(self._get_tokens_for_string("-")))
+
+    def _number_valid_parameter(self) -> set[int]:
+        if self.generated_tokens_within_state:
+            return (
+                self.valid_tokens_per_state[
+                    State.INSIDE_PARAMETER_VALUE_NUMBER
+                ]
+                | self._valid_value_terminators()
+            )
+
+        target_index = len(self.used_parameter_keys) - 1
+        signs_found: list[str] = []
+        i = 0
+        while i < len(self.current_request):
+            if (
+                self.current_request[i] == "-"
+                and i + 1 < len(self.current_request)
+                and self.current_request[i + 1].isdigit()
+            ):
+                signs_found.append("-")
+                i += 1
+                while (
+                    i < len(self.current_request)
+                    and self.current_request[i].isdigit()
+                ):
+                    i += 1
+            elif self.current_request[i].isdigit() and (
+                i == 0 or self.current_request[i - 1] != "-"
+            ):
+                signs_found.append("+")
+                i += 1
+                while (
+                    i < len(self.current_request)
+                    and self.current_request[i].isdigit()
+                ):
+                    i += 1
+            else:
+                i += 1
+
+        if (
+            target_index < len(signs_found)
+            and signs_found[target_index] == "-"
+        ):
+            return self._get_tokens_for_string("-")
+        return (
+            self.valid_tokens_per_state[State.INSIDE_PARAMETER_VALUE_NUMBER]
+            | self._valid_value_terminators()
+        )
+
+    def _get_valid_tokens(
+        self, fixed_sequence_states: dict[State, tuple[list[int], State]]
+    ) -> set[int]:
         MAX_NUMBER_TOKENS = 10
         MAX_STRING_TOKENS = 25
         if self.current_state in fixed_sequence_states:
@@ -259,7 +317,7 @@ class Decoder:
             if len(self.generated_tokens_within_state) >= MAX_NUMBER_TOKENS:
                 valid_tokens = self._valid_value_terminators()
             else:
-                valid_tokens = self.valid_tokens_per_state[State.INSIDE_PARAMETER_VALUE_NUMBER] | self._valid_value_terminators()
+                valid_tokens = self._number_valid_parameter()
         elif self.current_state == State.INSIDE_PARAMETER_VALUE_STRING:
             if len(self.generated_tokens_within_state) >= MAX_STRING_TOKENS:
                 valid_tokens = self.quote_tokens
@@ -269,7 +327,15 @@ class Decoder:
             valid_tokens = self.valid_tokens_per_state[self.current_state]
         return valid_tokens
 
-    def _change_state(self, fixed_sequence_states: dict[State, State], previous_state: State, highest_token_score: int, result: dict, immediate_transitions: dict[State, State], state_at_start: State) -> None:
+    def _change_state(
+        self,
+        fixed_sequence_states: dict[State, tuple[list[int], State]],
+        previous_state: State | None,
+        highest_token_score: int,
+        result: dict[str, Any],
+        immediate_transitions: dict[State, State],
+        state_at_start: State,
+    ) -> State:
         if self.current_state in fixed_sequence_states:
             target_seq, next_state = fixed_sequence_states[self.current_state]
             self.position_within_state += 1
@@ -285,13 +351,21 @@ class Decoder:
             elif previous_state == State.EXPECTING_PARAMETER_KEY:
                 for func in self.function_definitions:
                     if func.name == self.chosen_function_name:
-                        param_type = func.parameters[self.current_parameter_key].type
+                        param_type = func.parameters[
+                            self.current_parameter_key
+                        ].type
                         if param_type == "number" or param_type == "integer":
-                            self.current_state = State.INSIDE_PARAMETER_VALUE_NUMBER
+                            self.current_state = (
+                                State.INSIDE_PARAMETER_VALUE_NUMBER
+                            )
                         elif param_type == "string":
-                            self.current_state = State.INSIDE_PARAMETER_VALUE_STRING
+                            self.current_state = (
+                                State.INSIDE_PARAMETER_VALUE_STRING
+                            )
                         elif param_type == "boolean":
-                            self.current_state = State.INSIDE_PARAMETER_VALUE_BOOLEAN
+                            self.current_state = (
+                                State.INSIDE_PARAMETER_VALUE_BOOLEAN
+                            )
 
         elif self.current_state == State.EXPECTING_COMMA:
             if previous_state == State.INSIDE_FUNCTION_NAME:
@@ -305,7 +379,10 @@ class Decoder:
 
         elif self.current_state == State.INSIDE_FUNCTION_NAME:
             self.generated_tokens_within_state.append(highest_token_score)
-            if self.generated_tokens_within_state in self.encoded_function_names.values():
+            if (
+                self.generated_tokens_within_state
+                in self.encoded_function_names.values()
+            ):
                 for name, tokens in self.encoded_function_names.items():
                     if tokens == self.generated_tokens_within_state:
                         result["name"] = name
@@ -313,14 +390,13 @@ class Decoder:
                 self.generated_tokens_within_state = []
                 self.current_state = State.EXPECTING_COMMA
 
-        # zero-parameter fix: the parameter-count fork lives at the
-        # transition out of the open brace, so a zero-param function never
-        # enters EXPECTING_PARAMETER_KEY at all
         elif self.current_state == State.EXPECTING_OPEN_PARAMETER_BRACE:
             for func in self.function_definitions:
                 if func.name == self.chosen_function_name:
                     if len(func.parameters) == 0:
-                        self.current_state = State.EXPECTING_CLOSING_PARAMETER_BRACE
+                        self.current_state = (
+                            State.EXPECTING_CLOSING_PARAMETER_BRACE
+                        )
                     else:
                         self.current_state = State.EXPECTING_PARAMETER_KEY
 
@@ -338,48 +414,54 @@ class Decoder:
         elif self.current_state == State.INSIDE_PARAMETER_VALUE_NUMBER:
             token_str = self.vocab[highest_token_score]
             if token_str == ",":
-                decoded_para = self.model.decode(self.generated_tokens_within_state)
+                decoded_para = self.model.decode(
+                    self.generated_tokens_within_state
+                )
                 converted = self._converted_int_para(decoded_para)
                 result["parameters"][self.current_parameter_key] = converted
                 self.generated_tokens_within_state = []
                 self.current_state = State.EXPECTING_PARAMETER_KEY
             elif token_str == "}":
-                decoded_para = self.model.decode(self.generated_tokens_within_state)
+                decoded_para = self.model.decode(
+                    self.generated_tokens_within_state
+                )
                 converted = self._converted_int_para(decoded_para)
                 result["parameters"][self.current_parameter_key] = converted
                 self.generated_tokens_within_state = []
                 self.current_state = State.EXPECTING_CLOSING_BRACE
             else:
-                # accumulate
+
                 self.generated_tokens_within_state.append(highest_token_score)
 
         elif self.current_state == State.INSIDE_PARAMETER_VALUE_STRING:
-            if self.quote_tokens.isdisjoint(self.generated_tokens_within_state):
-                # no quote yet -> this is the OPENING quote
+            if self.quote_tokens.isdisjoint(
+                self.generated_tokens_within_state
+            ):
+
                 self.generated_tokens_within_state.append(highest_token_score)
             elif highest_token_score in self.quote_tokens:
-                # already open, another quote -> CLOSE -> finalize
+
                 decoded = self.model.decode(self.generated_tokens_within_state)
-                # strip the opening quote and any spurious leading space
-                value = decoded.lstrip('"').lstrip(' ')
-                # re-wrap as a JSON string document so json.loads performs the
-                # escape translation (\\ -> \) and always returns a str
+
+                value = decoded.lstrip('"').lstrip(" ")
+
                 try:
                     new_value = json.loads('"' + value + '"')
                 except json.JSONDecodeError:
-                    # model emitted non-JSON spelling (e.g. a lone backslash):
-                    # keep the raw characters
+
                     new_value = value
                 result["parameters"][self.current_parameter_key] = new_value
                 self.generated_tokens_within_state = []
                 for func in self.function_definitions:
                     if func.name == self.chosen_function_name:
-                        if len(self.used_parameter_keys) < len(func.parameters):
+                        if len(self.used_parameter_keys) < len(
+                            func.parameters
+                        ):
                             self.current_state = State.EXPECTING_COMMA
                         else:
                             self.current_state = State.EXPECTING_CLOSING_BRACE
             else:
-                # already open, ordinary content -> accumulate
+
                 self.generated_tokens_within_state.append(highest_token_score)
 
         elif self.current_state == State.INSIDE_PARAMETER_VALUE_BOOLEAN:
@@ -398,37 +480,52 @@ class Decoder:
         previous_state = state_at_start
         return previous_state
 
-
-    def generate(self, prompt) -> dict:
+    def generate(self, prompt: str) -> dict[str, Any]:
         self.current_state = State.EXPECTING_OPEN_BRACE
         self.used_parameter_keys = []
         self.generated_tokens_within_state = []
         self.position_within_state = 0
         self.chosen_function_name = ""
         self.current_parameter_key = ""
-        # CHANGE 1 (support): keep the raw prompt so the string state can
-        # detect value boundaries inside it
+
         self.prompt = prompt
-        immediate_transitions = {
+
+        marker = 'Request: "'
+        idx = self.prompt.rfind(marker)
+        if idx != -1:
+            start = idx + len(marker)
+            end = self.prompt.find('"', start)
+            self.current_request = (
+                self.prompt[start:end] if end != -1 else self.prompt[start:]
+            )
+        else:
+            self.current_request = self.prompt
+        immediate_transitions: dict[State, State] = {
             State.EXPECTING_OPEN_BRACE: State.EXPECTING_NAME,
-            State.EXPECTING_CLOSING_PARAMETER_BRACE: State.EXPECTING_CLOSING_BRACE,
+            State.EXPECTING_CLOSING_PARAMETER_BRACE: (
+                State.EXPECTING_CLOSING_BRACE
+            ),
             State.EXPECTING_CLOSING_BRACE: State.DONE,
         }
-        fixed_sequence_states = {
+        fixed_sequence_states: dict[State, tuple[list[int], State]] = {
             State.EXPECTING_NAME: (self.encoded_name, State.EXPECTING_COLON),
-            State.EXPECTING_PARAMETERS: (self.encoded_parameters, State.EXPECTING_COLON),
+            State.EXPECTING_PARAMETERS: (
+                self.encoded_parameters,
+                State.EXPECTING_COLON,
+            ),
         }
         input_ids = self.model.encode(prompt).tolist()[0]
-        result = {"prompt": prompt, "name": "", "parameters": {}}
-        previous_state = None
+        result: dict[str, Any] = {
+            "prompt": prompt,
+            "name": "",
+            "parameters": {},
+        }
+        previous_state: State | None = None
         while self.current_state != State.DONE:
             state_at_start = self.current_state
 
-            # --- 1. Get valid tokens for current state ---
             valid_tokens = self._get_valid_tokens(fixed_sequence_states)
 
-
-            # --- 2. Pick token: skip the model when only one is legal ---
             if len(valid_tokens) == 1:
                 highest_token_score = next(iter(valid_tokens))
             else:
@@ -437,11 +534,13 @@ class Decoder:
                 highest_token_score = int(np.argmax(clean_tokens))
             input_ids.append(highest_token_score)
 
-            # --- 3. State transitions ---
-            previous_state = self._change_state(fixed_sequence_states,
-                                                previous_state,
-                                                highest_token_score, result,
-                                                immediate_transitions,
-                                                state_at_start)
+            previous_state = self._change_state(
+                fixed_sequence_states,
+                previous_state,
+                highest_token_score,
+                result,
+                immediate_transitions,
+                state_at_start,
+            )
 
         return result

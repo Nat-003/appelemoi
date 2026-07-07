@@ -42,8 +42,7 @@ def main() -> None:
         print(f"\nTotal: {total:.2f}s for {len(data)} prompts "
             f"({total / len(data):.2f}s avg)")
         generate_output(data, args.output)
-        # result = decoder._string_valid_parameter()
-        # print(result)
+        result = decoder._string_valid_parameter()
     except FileNotFoundError:
         print("Invalide fiel path")
 if __name__ == "__main__":
