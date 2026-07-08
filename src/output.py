@@ -1,7 +1,11 @@
 import os
 import json
 
-def generate_output(data: list, path: str = "data/output/function_calling_results.json") -> None:
+
+def generate_output(
+    data: list,
+    path: str = "data/output/function_calling_results.json",
+) -> None:
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
