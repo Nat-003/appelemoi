@@ -1,4 +1,5 @@
 from src.parser import FunctionCalling, FunctionDefinition
+from typing import Any
 import json
 
 
@@ -23,7 +24,7 @@ def build_prompt(
     # one-shot example built from the FIRST real function, so it always
     # references a function that actually exists in this definition set
     first = function_definitions[0]
-    example_args = {}
+    example_args: dict[str, Any] = {}
     for name, p in first.parameters.items():
         if p.type == "number":
             example_args[name] = 1

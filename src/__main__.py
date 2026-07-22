@@ -35,10 +35,14 @@ def main() -> None:
             args.functions_definition
         )
         function_calling = get_function_calling(args.input)
-        if function_definition is None or function_calling is None:
-            return
         model = Small_LLM_Model()
         vocab = vocab_loader(model)
+        if (
+            function_definition is None
+            or function_calling is None
+            or vocab is None
+        ):
+            return
         decoder = Decoder(model, vocab, function_definition)
         data = []
         total_start = time.perf_counter()
@@ -56,7 +60,6 @@ def main() -> None:
             f"({total / len(data):.2f}s avg)"
         )
         generate_output(data, args.output)
-        result = decoder._string_valid_parameter()
     except (FileNotFoundError):
         print("Invalid file path")
 
